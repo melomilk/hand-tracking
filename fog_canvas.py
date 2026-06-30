@@ -7,7 +7,7 @@ cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 # fog starts clear
-fog = np.zeros((480, 640), dtype=np.float32)
+fog = np.ones((480, 640), dtype=np.float32)
 
 # initialize face mesh
 mp_face = mp.solutions.face_mesh
@@ -35,10 +35,6 @@ while True:
     key = cv2.waitKey(10) & 0xFF
     if key == ord('q'):
         break
-    elif key == ord('f'):
-        fog = np.zeros((480, 640), dtype=np.float32)
-    elif key == ord('c'):
-        fog = np.ones((480, 640), dtype=np.float32)
 
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_mesh.process(rgb_frame)
@@ -49,6 +45,7 @@ while True:
     is_blowing = False
     is_pinching = False
     index_x, index_y = None, None
+    
 
     if results.multi_face_landmarks:
         landmarks = results.multi_face_landmarks[0].landmark
@@ -67,6 +64,8 @@ while True:
         mouth_open = (lower_y - upper_y) > 15
         face_width = right_x - left_x
         is_blowing = mouth_open and face_width > 200
+        mouth_x = (left_x + right_x) / 2
+        mouth_y = (upper_y + lower_y) / 2
 
         cv2.putText(frame, f'mouth open: {mouth_open}', (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -76,7 +75,10 @@ while True:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
 
     if is_blowing:
-        fog = np.clip(fog + 0.05, 0, 1)
+        breath_mask = np.zeros((480, 640), dtype=np.float32)
+        cv2.circle(breath_mask, (int(mouth_x), int(mouth_y)), 80, 1.0, thickness=-1)
+        breath_mask = cv2.GaussianBlur(breath_mask, (81, 81), 0)
+        fog = np.clip(fog - breath_mask * 0.05, 0, 1)
 
     if hand_results.multi_hand_landmarks:
         hand_landmarks = hand_results.multi_hand_landmarks[0].landmark
@@ -106,7 +108,7 @@ while True:
         prev_index_pos = current_pos
     else:
         prev_index_pos = None 
-        
+
     # create foggy version
     blurred = cv2.GaussianBlur(frame, (51, 51), 0)
     white = np.ones_like(frame) * 255
