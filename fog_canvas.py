@@ -25,6 +25,7 @@ hands = mp_hands.Hands(
 )
 
 prev_index_pos = None  #in order to make lines smooth (w/out gaps)
+prev_finger_pos = None
 
 def add_fog_blob(fog, center_x, center_y, radius=80, max_density=60):
     h, w = fog.shape
@@ -42,6 +43,10 @@ def add_fog_blob(fog, center_x, center_y, radius=80, max_density=60):
 def evaporate_fog(fog, evaporation_rate=1.0):
     fog[:] = np.clip(fog.astype(np.float32) - evaporation_rate, 0, 255).astype(np.uint8)
 
+
+def clear_fog_swipe(fog, decay_rate=30):
+    fog[:] = np.clip(fog.astype(np.float32) - decay_rate, 0, 255).astype(np.uint8)
+
 while True:
     success, frame = cap.read()
     if not success:
@@ -58,6 +63,7 @@ while True:
     # if a face or hand isn't detected in a given frame
     is_blowing = False
     is_pinching = False
+    is_swiping = False
     index_x, index_y = None, None
     
 
@@ -89,28 +95,47 @@ while True:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
 
     if is_blowing:
-            add_fog_blob(fog, int(mouth_x), int(mouth_y))
+        add_fog_blob(fog, int(mouth_x), int(mouth_y))
         # evaporation runs every frame, outside is_blowing
     evaporate_fog(fog)
 
 
     if hand_results.multi_hand_landmarks:
-        hand_landmarks = hand_results.multi_hand_landmarks[0].landmark
-        h, w = frame.shape[:2]
+            hand_landmarks = hand_results.multi_hand_landmarks[0].landmark
+            h, w = frame.shape[:2]
 
-        thumb_finger = hand_landmarks[4]
-        index_finger = hand_landmarks[8]
+            thumb_finger = hand_landmarks[4]
+            index_finger = hand_landmarks[8]
 
-        thumb_x, thumb_y = thumb_finger.x * w, thumb_finger.y * h
-        index_x, index_y = index_finger.x * w, index_finger.y * h
+            thumb_x, thumb_y = thumb_finger.x * w, thumb_finger.y * h
+            index_x, index_y = index_finger.x * w, index_finger.y * h
 
-        distance = ((index_x - thumb_x) ** 2 + (index_y - thumb_y) ** 2) ** 0.5
-        is_pinching = distance < 35
+            distance = ((index_x - thumb_x) ** 2 + (index_y - thumb_y) ** 2) ** 0.5
+            is_pinching = distance < 35
 
-        cv2.putText(frame, f'distance: {int(distance)}', (10, 120),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-        cv2.putText(frame, f'pinching: {is_pinching}', (10, 150),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            # detect open palm — all fingertips above their knuckles
+            fingertip_ids = [8, 12, 16, 20]
+            knuckle_ids =   [6, 10, 14, 18]
+            fingers_up = all(
+                hand_landmarks[tip].y < hand_landmarks[knuckle].y
+                for tip, knuckle in zip(fingertip_ids, knuckle_ids)
+            )
+            is_swiping = fingers_up and not is_pinching
+
+            cv2.putText(frame, f'distance: {int(distance)}', (10, 120),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+            cv2.putText(frame, f'pinching: {is_pinching}', (10, 150),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.putText(frame, f'swiping: {is_swiping}', (10, 180),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+
+    else:
+        prev_finger_pos = None
+        
+    if is_swiping:
+            clear_fog_swipe(fog)
+            cv2.putText(frame, 'SWIPE!', (250, 240),
+                        cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 3)
 
 
     if is_pinching and index_x is not None:
