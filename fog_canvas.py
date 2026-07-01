@@ -6,8 +6,7 @@ cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-# fog starts clear
-fog = np.ones((480, 640), dtype=np.float32)
+fog = np.zeros((480, 640), dtype=np.uint8)  # 0 = no fog, 255 = maximum fog
 
 # initialize face mesh
 mp_face = mp.solutions.face_mesh
@@ -27,6 +26,22 @@ hands = mp_hands.Hands(
 
 prev_index_pos = None  #in order to make lines smooth (w/out gaps)
 
+def add_fog_blob(fog, center_x, center_y, radius=80, max_density=60):
+    h, w = fog.shape
+    y_coords, x_coords = np.ogrid[:h, :w]
+    
+    # calculate distance from center for every pixel
+    distance = np.sqrt((x_coords - center_x)**2 + (y_coords - center_y)**2)
+    
+    # radial gradient: closer to center = more fog added
+    mask = np.clip(1 - distance / radius, 0, 1)
+    
+    # add to fog density, clamp at 255
+    fog[:] = np.clip(fog.astype(np.float32) + mask * max_density, 0, 255).astype(np.uint8)
+
+def evaporate_fog(fog, evaporation_rate=1.0):
+    fog[:] = np.clip(fog.astype(np.float32) - evaporation_rate, 0, 255).astype(np.uint8)
+
 while True:
     success, frame = cap.read()
     if not success:
@@ -40,7 +55,6 @@ while True:
     results = face_mesh.process(rgb_frame)
     hand_results = hands.process(rgb_frame)
 
-    # defaults — important so the program doesn't crash
     # if a face or hand isn't detected in a given frame
     is_blowing = False
     is_pinching = False
@@ -75,10 +89,10 @@ while True:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
 
     if is_blowing:
-        breath_mask = np.zeros((480, 640), dtype=np.float32)
-        cv2.circle(breath_mask, (int(mouth_x), int(mouth_y)), 80, 1.0, thickness=-1)
-        breath_mask = cv2.GaussianBlur(breath_mask, (81, 81), 0)
-        fog = np.clip(fog - breath_mask * 0.05, 0, 1)
+            add_fog_blob(fog, int(mouth_x), int(mouth_y))
+        # evaporation runs every frame, outside is_blowing
+    evaporate_fog(fog)
+
 
     if hand_results.multi_hand_landmarks:
         hand_landmarks = hand_results.multi_hand_landmarks[0].landmark
@@ -98,24 +112,27 @@ while True:
         cv2.putText(frame, f'pinching: {is_pinching}', (10, 150),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-    if is_pinching and index_x is not None:
-        cv2.circle(fog, (int(index_x), int(index_y)), 20, 1, thickness=-1)
 
     if is_pinching and index_x is not None:
         current_pos = (int(index_x), int(index_y))
         if prev_index_pos is not None:
-            cv2.line(fog, prev_index_pos, current_pos, 1, thickness=40)
+            cv2.line(fog, prev_index_pos, current_pos, 0, thickness=40)
         prev_index_pos = current_pos
     else:
-        prev_index_pos = None 
+        prev_index_pos = None
 
-    # create foggy version
-    blurred = cv2.GaussianBlur(frame, (51, 51), 0)
-    white = np.ones_like(frame) * 255
-    foggy = cv2.addWeighted(blurred, 0.75, white, 0.25, 0)
+# create blue-white fog color layer
+    fog_color = np.full_like(frame, (220, 210, 200))  # blue-white tint in BGR
+    
+    # add noise texture
+    noise = np.random.randint(0, 25, (480, 640), dtype=np.uint8)
+    noise_3ch = cv2.merge([noise, noise, noise])
+    fog_color = cv2.add(fog_color, noise_3ch)
+    
+    # use density map as alpha mask
+    alpha = fog[..., np.newaxis] / 255.0  # convert 0-255 to 0.0-1.0 for blending
+    output = (frame * (1 - alpha) + fog_color * alpha).astype(np.uint8)
 
-    mask_3ch = np.stack([fog] * 3, axis=-1)
-    output = (frame * mask_3ch + foggy * (1 - mask_3ch)).astype(np.uint8)
 
     cv2.imshow("Fog Canvas", output)
 
